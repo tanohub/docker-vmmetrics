@@ -1,0 +1,116 @@
+version: "3.5"
+services:
+  vmagent:
+    container_name: vmagent
+    image: victoriametrics/vmagent:v1.81.2
+    depends_on:
+      - "victoriametrics"
+    ports:
+      - 8429:8429
+    volumes:
+      - vmagentdata:/vmagentdata
+      - ./confs/prometheus.yml:/etc/prometheus/prometheus.yml
+      # force local timezone      
+      - "/etc/timezone:/etc/timezone:ro"
+      - "/etc/localtime:/etc/localtime:ro"
+    command:
+      - "--promscrape.config=/etc/prometheus/prometheus.yml"
+      - "--remoteWrite.url=http://victoriametrics:8428/api/v1/write"
+    networks:
+      - vm_net
+    restart: always
+  victoriametrics:
+    container_name: victoriametrics
+    image: victoriametrics/victoria-metrics:v1.81.2
+    ports:
+      - 8428:8428
+      - 8089:8089
+      - 8089:8089/udp
+      - 2003:2003
+      - 2003:2003/udp
+      - 4242:4242
+    volumes:
+      - vmdata:/storage
+      # force local timezone      
+      - "/etc/timezone:/etc/timezone:ro"
+      - "/etc/localtime:/etc/localtime:ro"
+    command:
+      - "--storageDataPath=/storage"
+      - "--graphiteListenAddr=:2003"
+      - "--opentsdbListenAddr=:4242"
+      - "--httpListenAddr=:8428"
+      - "--influxListenAddr=:8089"
+      - "--vmalert.proxyURL=http://vmalert:8880"
+    networks:
+      - vm_net
+    restart: always
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:9.1.0
+    depends_on:
+      - "victoriametrics"
+    ports:
+      - 3000:3000
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./provisioning/:/etc/grafana/provisioning/
+      # load custom dashboards
+      - ./provisioning/dashboards/victoriametrics.json:/var/lib/grafana/dashboards/vm.json
+      - ./provisioning/dashboards/vmagent.json:/var/lib/grafana/dashboards/vmagent.json
+      - ./provisioning/dashboards/vmalert.json:/var/lib/grafana/dashboards/vmalert.json
+      - ./provisioning/dashboards/testdashboard.json:/var/lib/grafana/dashboards/testdashboard.json
+      # force local timezone      
+      - "/etc/timezone:/etc/timezone:ro"
+      - "/etc/localtime:/etc/localtime:ro"
+    networks:
+      - vm_net
+    restart: always
+  vmalert:
+    container_name: vmalert
+    image: victoriametrics/vmalert:v1.81.2
+    depends_on:
+      - "victoriametrics"
+      - "alertmanager"
+    ports:
+      - 8880:8880
+    volumes:
+      - ./confs/alerts.yml:/etc/alerts/alerts.yml
+      - ./confs/alerts-health.yml:/etc/alerts/alerts-health.yml
+      - ./confs/alerts-vmagent.yml:/etc/alerts/alerts-vmagent.yml
+      # force local timezone      
+      - "/etc/timezone:/etc/timezone:ro"
+      - "/etc/localtime:/etc/localtime:ro"
+    command:
+      - "--datasource.url=http://victoriametrics:8428/"
+      - "--remoteRead.url=http://victoriametrics:8428/"
+      - "--remoteWrite.url=http://victoriametrics:8428/"
+      - "--notifier.url=http://alertmanager:9093/"
+      - "--rule=/etc/alerts/*.yml"
+      # display source of alerts in grafana
+      - "--external.url=http://127.0.0.1:3000" #grafana outside container
+      # when copypaste the line be aware of '$$' for escaping in '$expr'
+      - '--external.alert.source=explore?orgId=1&left=["now-1h","now","VictoriaMetrics",{"expr":"{{$$expr|quotesEscape|crlfEscape|queryEscape}}"},{"mode":"Metrics"},{"ui":[true,true,true,"none"]}]'
+    networks:
+      - vm_net
+    restart: always
+  alertmanager:
+    container_name: alertmanager
+    image: prom/alertmanager:v0.24.0
+    volumes:
+      - ./confs/alertmanager.yml:/config/alertmanager.yml
+      # force local timezone      
+      - "/etc/timezone:/etc/timezone:ro"
+      - "/etc/localtime:/etc/localtime:ro"
+    command:
+      - "--config.file=/config/alertmanager.yml"
+    ports:
+      - 9093:9093
+    networks:
+      - vm_net
+    restart: always
+volumes:
+  vmagentdata: {}
+  vmdata: {}
+  grafanadata: {}
+networks:
+  vm_net:
